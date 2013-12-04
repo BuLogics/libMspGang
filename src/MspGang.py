@@ -10,6 +10,9 @@
 from __future__ import (division, print_function, absolute_import)
 import logging
 import serial
+import sys
+import struct
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -17,9 +20,47 @@ if __name__ == '__main__':
     print('Not usable as a program. Please use as a module') 
 
 SYN = 0x0D # communcation SYNcronize
+
 ACK = 0x90 # communcation ACKknowledge
 NACK = 0xA0 #Negavive ACKnowledge
 IN_PROG = 0xB0 # Command in Progress
+
+IMAGE_1 = 0x00
+IMAGE_2 = 0x01
+IMAGE_3 = 0x02
+IMAGE_4 = 0x03
+IMAGE_5 = 0x04
+IMAGE_6 = 0x05
+IMAGE_7 = 0x06
+IMAGE_8 = 0x07
+IMAGE_9 = 0x08
+IMAGE_10 = 0x09
+IMAGE_11 = 0x0A
+IMAGE_12 = 0x0B
+IMAGE_13 = 0x0C
+IMAGE_14 = 0x0D
+IMAGE_15 = 0x0E
+IMAGE_16 = 0x0F
+
+CHANNEL_1 = 0x01
+CHANNEL_2 = 0x02
+CHANNEL_3 = 0x04
+CHANNEL_4 = 0x08
+CHANNEL_5 = 0x10
+CHANNEL_6 = 0x20
+CHANNEL_7 = 0x40
+CHANNEL_8 = 0x80
+ALL_CHANNELS = 0xFF
+
+SOURCE_PWR = 0x00
+GANG_PWR = 0x01
+
+CONNECT = 0x01
+ERASE = 0x02
+BLANK_CHECK = 0x04
+PROGRAM = 0x08
+VERIFY = 0x10
+#SECURE = 0x20 #Don't use in testing!
 
 class MspGangError(RuntimeError):
     """ Custom Error class to wrap Serial and RuntimeErrors for our
@@ -38,11 +79,58 @@ class MspGangDataFrame(object):
         pass
         self.bytes_ = None #bytes
 
-    def MainProc(cls,image,channles,powerSource,tasks):
+    @classmethod
+    def ProgMediator(cls,image,channles,powerSource,tasks):
         frames = []
-        frames.append([])
-        frames.append(MspGangDataFrame.FrameFactory())
-        
+        data = [image, channles, powerSource, tasks]
+        for i in range(len(data)):
+            frames.append(MspGangDataFrame.FrameFactory(i,data[i]))
+            frames[i].finalize()
+        frames.append(MspGangDataFrame.FrameFactory('Main Process Command'))
+        frames[4].finalize()
+        return frames
+
+    @classmethod
+    def FileParser(cls,file_):
+        f = open(file_, 'rb')
+        data = f.read(1)
+        data_list = []
+        bin_list = []
+        while data:
+            bin_val = int(ord(data)) 
+            hex_val = "0x%0.2X" % bin_val
+            bin_list.append(bin_val)
+            data_list.append(hex_val)
+            data = f.read(1)
+        bytes_ = []
+        count = -1
+        for i in range(len(bin_list)):
+            if  i % 128 == 0:
+                count = count + 1
+                bytes_.append([])
+                bytes_[count].append(0x3E)
+                bytes_[count].append(0x43)
+                bytes_[count].append(128+6)
+                bytes_[count].append(128+6)
+                if count % 2 == 0:
+                    bytes_[count].append(0x00)
+                else:
+                    bytes_[count].append(0x80)
+                bytes_[count].append(count//2)   
+                bytes_[count].append(0x00)
+                bytes_[count].append(0x00)
+                bytes_[count].append(128)
+                bytes_[count].append(0x00)
+            
+            bytes_[count].append(bin_list[i])
+        frames = []
+        for i in range(len(bytes_)):
+            frames.append(MspGangDataFrame._passFrame(bytes_[i]))
+            frames[i].finalize()
+        return frames
+
+ 
+
     @classmethod
     def FrameFactory(cls,cmd, data = 0x00):
         """ Factory func for building MspGangDataFrames. Builds frame but does not
@@ -50,13 +138,25 @@ class MspGangDataFrame(object):
         checksum before being set to the MspGang 
         @retursn an MspGangDataFrame, the data and type based on the input string
         """
-        import pdb; pdb.set_trace()
+        #import pdb; pdb.set_trace()
 
         ret = MspGangDataFrame()
-        if cmd == 'Select Image Command':
+        if cmd == 0: #'Select Image':
             image_to_set = data
             ret.bytes_ = bytearray([0x3E, 0x50, 0x04, 0x04, image_to_set, 0x00, 0x00, 0x00])
+             
+        elif cmd == 1:#'Channel Enable':
+            channels_to_enable = data 
+            ret.bytes_ = bytearray([0x3E,0x56,0x06,0x06,0x0C,0x00,0x02,0x00, channels_to_enable,0x00])
             
+        elif cmd == 2:#'Power Source':
+            power_source = data 
+            ret.bytes_ = bytearray([0x3E, 0x56, 0x06, 0x06, 0x08, 0x00, 0x02, 0x00, power_source, 0x00])
+            
+        elif cmd == 3:#'Tasks':
+            tasks_to_perform = data
+            ret.bytes_ = bytearray([0x3E, 0x56, 0x06, 0x06, 0x04, 0x00, 0x02, 0x00, tasks_to_perform, 0x00])
+           
         elif cmd == 'Self Test':
             ret.bytes_ = bytearray([0x3E, 0x35, 0x06, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
             
@@ -66,33 +166,13 @@ class MspGangDataFrame(object):
         elif cmd == 'Set IO State Command':
             ret.bytes_ = bytearray([0x3E, 0x4E, 0x0C, 0x0C, 0xE4, 0x0C, 0x08, 0x00, 0x04, 0x60,\
 							0x00, 0x00, 0x7F, 0x00, 0x00, 0x00])
-            
-        elif cmd == 'Enable':
-            ret.bytes_ = bytearray([0x3E,0x56,0x06,0x06,0x0C,0x00,0x02,0x00,0x04,0x00])
-            
-        elif cmd == 'Gang Power':
-            ret.bytes_ = bytearray([0x3E, 0x56, 0x06, 0x06, 0x08, 0x00, 0x02, 0x00, 0x01, 0x00])
-            
-        elif cmd == 'Connect and Erase':
-            ret.bytes_ = bytearray([0x3E, 0x56, 0x06, 0x06, 0x04, 0x00, 0x02, 0x00, 0x0F, 0x00])
-
-        elif cmd == 'Get Status':
-            ret.bytes_ = bytearray([0xA5])
-
         elif cmd == 'Erase':
-            ret.bytes_ = bytearray([0x3E, 0x33, 0x06, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-
-        elif cmd == 'Screen: Img 16':
-            ret.bytes_ = bytearray([0x3E, 0x54, 0x14, 0x14, 0x04, 0xA0, 0x10, 0x00, 0x49, 0x6D, 0x61, 0x67, 0x65, 0x20, 0x6E, 0x6F, 0x2E, 0x20, 0x31, 0x36, 0x00, 0x00, 0x00, 0x00])
-            
-        elif cmd == 'Screen: Erasing':
-            ret.bytes_ = bytearray([0x3E, 0x54, 0x14, 0x14, 0x06, 0xA0, 0x10, 0x00, 0x45, 0x72, 0x61, 0x73, 0x69, 0x6E, 0x67, 0x2E, 0x2E, 0x2E, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-
+            ret.bytes_ = bytearray([0x3E, 0x33, 0x04, 0x04, 0x00, 0x00, 0x00, 0x00])
 
         return ret
 
     @classmethod
-    def passFrame(self,array):
+    def _passFrame(self,array):
         ret = MspGangDataFrame()
         #import pdb; pdb.set_trace()
         ret.bytes_ = bytearray(array)
@@ -131,6 +211,7 @@ class MspGang(object):
         self._serial_dev = None
         self.image_transferred = False
         self.closed = True
+        self._last_status_result = None
         logging.debug('init completed')
         #self.alcaStream = None
 
@@ -154,13 +235,71 @@ class MspGang(object):
                 self._serial_dev = serial_dev
             except MspGangError as e:
                 self._serial_dev = None
-                import pdb; pdb.set_trace() 
+                #import pdb; pdb.set_trace() 
                 # todo: Close serial device
                 logging.error(e)
                 serial_dev.close()
                 raise 
         return serial_dev
-    
+  
+    def autoopen(self):
+        raise NotImplementedError("Auto Open not implemented.")
+
+    def set_image(self,bingang_file):
+        frame = MspGangDataFrame.FrameFactory(0,IMAGE_1)
+        frame.finalize()
+        self.send_single_frame(frame.get_stream())
+
+        frame = MspGangDataFrame.FrameFactory('Erase')
+        frame.finalize()
+        self.send_single_frame(frame.get_stream())        
+
+        
+        #s = raw_input('--> ')
+
+        frame_list =  MspGangDataFrame.FileParser(bingang_file)
+        self.send_multi_frame(frame_list)
+        self.image_transferred = True
+
+    def erase(self):
+        channel = ALL_CHANNELS
+        task = CONNECT | ERASE
+        frame_list = MspGangDataFrame.ProgMediator(IMAGE_1,channel, GANG_PWR, task)
+        self.send_multi_frame(frame_list)
+        self.send_single_frame(bytearray([0xA5]))
+        return self._error_check()
+
+    def program(self):
+        channel = ALL_CHANNELS
+        task = CONNECT | ERASE | BLANK_CHECK | PROGRAM | VERIFY
+        frame_list = MspGangDataFrame.ProgMediator(IMAGE_1,channel, GANG_PWR, task)
+        self.send_multi_frame(frame_list)
+        self.send_single_frame(bytearray([0xA5]))
+        return self._error_check()
+
+    def verify(self):
+        channel = ALL_CHANNELS
+        task = CONNECT | VERIFY
+        frame_list = MspGangDataFrame.ProgMediator(IMAGE_1,channel, GANG_PWR, task)
+        self.send_multi_frame(frame_list)
+        self.send_single_frame(bytearray([0xA5]))
+        return self._failed_channels(self._error_check())
+
+    def _error_check(self):
+         return self._last_status_result[10] - ALL_CHANNELS
+
+
+    def _failed_channels(self,error):
+        fail_list = []
+        bin_val = 1
+        if error < 0:
+            error = error * -1
+        for i in range(8):
+            if error & bin_val == bin_val:
+                fail_list.append(i+1)
+            bin_val = bin_val * 2
+        return fail_list
+
     @classmethod
     def doSyncronize(cls, serial_dev):
         """ trys to run a MspGang sync handshake on the passed
@@ -246,13 +385,12 @@ class MspGang(object):
                 raise MspGangError("Nacked!")
                 #elif ack_byte == IN_PROG:
                 #cls.send(cls._serial_dev,bytearray([0xA5]))
-
-            print("0x%x\n" % ack_byte)
             bytes_received += 1
             if ack_byte == IN_PROG:
                 prog_byte = True
         raise MspGangError("Read %d bytes waiting for Serial ACK from MSP, something is wrong"
                             % MAX_BYTES)
+
 
     @classmethod    
     def check_progress(cls, stream):
@@ -268,29 +406,36 @@ class MspGang(object):
             try:
                 ack_byte = cls.read_stream(stream, timeout=1)
                 bytes_.append(ack_byte)
-                print("0x%x\n" % ack_byte)
             except MspGangError as e:
                 if "timed out" in e.message.lower():
-                    raise MspGangError("Timed out waiting for Serial ACK from MSP")
+                    raise MspGangError("Timed out waiting response from MSP")
                 else:
                     raise e
+        cls._last_status_result = bytes_
+        #import pdb; pdb.set_trace()
         if bytes_[6] == ACK:
-            return True
+            return (True,bytes_)
         elif bytes_[6] == IN_PROG:
-            return False
+            return (False,bytes_)
         elif bytes_[6] == NACK:
             raise MspGangError("Nacked!")
         
 
 
-    def send(self, bytes_,attempts=1, timeout=None ): 
+    def send_single_frame(self, bytes_,attempts=1, timeout=None ): 
         if attempts == 1:
             self._serial_dev.write(bytes_)
         else:
             raise MspGangException("one retry only for now")
         if bytes_[0] == 0xA5:
-            done = self.check_progress(self._serial_dev)
+            done, self._last_status_result = self.check_progress(self._serial_dev)
         else:
             done = self.wait_for_ack(self._serial_dev)
         if not done:
-            self.send(bytearray([0xA5]))
+            self.send_single_frame(bytearray([0xA5]))
+
+
+    def send_multi_frame(self,bytes_):
+        for i in range(len(bytes_)):
+            self.send_single_frame(bytes_[i].get_stream())
+

@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 if __name__ == '__main__':
     print('Not usable as a program. Please use as a module') 
 
+DATA_LENGTH = 128
+
 
 # MspGang Messages
 SYN = 0x0D # communcation SYNcronize
@@ -39,8 +41,13 @@ WRITE_IMAGE_CMD = 0x43
 
 # Main Config Options
 TASK_OPT = 0x04
+VCC_VALUE_OPT = 0x06
 PWR_SOURCE_OPT = 0x08
+INTERFACE_OPT = 0x0A
 CHANNEL_EN_OPT = 0x0C
+VCC_EN_OPT = 0x0E
+SBW_LINE_OPT = 0x14
+RESET_OPT = 0x18
 
 
 # Image select
@@ -62,6 +69,29 @@ IMAGE_15 = 0x0E
 IMAGE_16 = 0x0F
 
 
+# Tasks
+CONNECT = 0x01
+ERASE = 0x02
+BLANK_CHECK = 0x04
+PROGRAM = 0x08
+VERIFY = 0x10
+#SECURE = 0x20 #Don't use in testing!
+
+
+# Power source select
+TARGET_PWR = 0x00
+GANG_PWR = 0x01
+
+
+# Interface Values
+JTAG_FAST = 0x04
+JTAG_MED = 0x05
+JTAG_SLOW = 0x06
+SBW_FAST = 0x08
+SBW_MED = 0x09
+SBW_SLOW = 0x0A
+
+
 # Channel select
 CHANNEL_1 = 0x01
 CHANNEL_2 = 0x02
@@ -74,18 +104,18 @@ CHANNEL_8 = 0x80
 ALL_CHANNELS = 0xFF
 
 
-# Power source select
-TARGET_PWR = 0x00
-GANG_PWR = 0x01
+# VCC Target option
+VCC_OFF = 0x00 
+VCC_ON = 0x01 
+
+# SBW Line Select
+SBW_TDIO = 0x00
+SBW_RST = 0x01
 
 
-# Tasks
-CONNECT = 0x01
-ERASE = 0x02
-BLANK_CHECK = 0x04
-PROGRAM = 0x08
-VERIFY = 0x10
-#SECURE = 0x20 #Don't use in testing!
+
+RELASE_RESET = 0x00
+RESET_TARGET = 0x01
 
 
 class MspGangError(RuntimeError):
@@ -108,18 +138,18 @@ class MspGangDataFrame(object):
         self.bytes_ = None #bytes
 
     @classmethod
-    def ProgMediator(cls, image, channles, powerSource, tasks):
+    def ProgMediator(cls, image, tasks, vcc_val, powerSource, interface, channles, vcc_en):
         """
 		Sets options for main proccess.
 		@returns a list of frames ready to send to the Msp Gang
 		"""
         frames = []
-        data = [image, channles, powerSource, tasks]
+        data = [image, tasks, vcc_val, powerSource, interface, channles, vcc_en]
         for i in range(len(data)):
             frames.append(MspGangDataFrame.FrameFactory(i,data[i]))
             frames[i].finalize()
         frames.append(MspGangDataFrame.FrameFactory('Main Process Command'))
-        frames[4].finalize()
+        frames[len(data)].finalize()
         return frames
 
     @classmethod
@@ -142,13 +172,13 @@ class MspGangDataFrame(object):
         count = -1
         for i in range(len(raw_list)):
             #TODO: figure out better parseing logic
-            if  i % 128 == 0:
+            if  i % DATA_LENGTH == 0:
                 count = count + 1
                 bytes_.append([])
-                bytes_[count].append(0x3E)
-                bytes_[count].append(0x43)
-                bytes_[count].append(128+6)
-                bytes_[count].append(128+6)
+                bytes_[count].append(PROMPT)
+                bytes_[count].append(WRITE_IMAGE_CMD)
+                bytes_[count].append(DATA_LENGTH+6)
+                bytes_[count].append(DATA_LENGTH+6)
                 if count % 2 == 0:
                     bytes_[count].append(0x00)
                 else:
@@ -156,7 +186,7 @@ class MspGangDataFrame(object):
                 bytes_[count].append(count//2)   
                 bytes_[count].append(0x00)
                 bytes_[count].append(0x00)
-                bytes_[count].append(128)
+                bytes_[count].append(DATA_LENGTH)
                 bytes_[count].append(0x00)
             
             bytes_[count].append(raw_list[i])
@@ -191,21 +221,48 @@ class MspGangDataFrame(object):
             image_to_set = data
             ret.bytes_ = bytearray([PROMPT, SELECT_IMAGE_CMD, 0x04, 0x04,\
 							image_to_set, 0x00, 0x00, 0x00])
-             
-        elif cmd == 1:#'Channel Enable':
+
+        elif cmd == 1:#'Tasks':
+            tasks_to_perform = data
+            ret.bytes_ = bytearray([PROMPT, MAIN_CONFIG_CMD, 0x06, 0x06,\
+							TASK_OPT, 0x00, 0x02, 0x00, tasks_to_perform, 0x00])
+
+        elif cmd == 2:#'VCC Value':
+            vcc_val = data 
+            ret.bytes_ = bytearray([PROMPT, MAIN_CONFIG_CMD, 0x06, 0x06,\
+							VCC_VALUE_OPT, 0x00, 0x02, 0x00, 0x00, vcc_val])
+ 
+        elif cmd == 3:#'Power Source':
+            power_source = data 
+            ret.bytes_ = bytearray([PROMPT, MAIN_CONFIG_CMD, 0x06, 0x06,\
+							PWR_SOURCE_OPT, 0x00, 0x02, 0x00, power_source, 0x00])
+
+        elif cmd == 4:#'Interface':
+            interface = data
+            ret.bytes_ = bytearray([PROMPT, MAIN_CONFIG_CMD, 0x06, 0x06,\
+							INTERFACE_OPT, 0x00, 0x02, 0x00, interface, 0x00])
+            
+        elif cmd == 5:#'Channel Enable':
             channels_to_enable = data 
             ret.bytes_ = bytearray([PROMPT, MAIN_CONFIG_CMD, 0x06, 0x06,\
 							CHANNEL_EN_OPT, 0x00 ,0x02, 0x00, channels_to_enable, 0x00])
             
-        elif cmd == 2:#'Power Source':
-            power_source = data 
+           
+        elif cmd == 6:#'Target VCC Enabled Opt':
+            vcc_en  = data
             ret.bytes_ = bytearray([PROMPT, MAIN_CONFIG_CMD, 0x06, 0x06,\
-							PWR_SOURCE_OPT, 0x00, 0x02, 0x00, power_source, 0x00])
-            
-        elif cmd == 3:#'Tasks':
-            tasks_to_perform = data
+							VCC_EN_OPT, 0x00, 0x02, 0x00, vcc_en, 0x00])
+
+        elif cmd == 7:#'SBW Line Select':
+            sbw_line = data
             ret.bytes_ = bytearray([PROMPT, MAIN_CONFIG_CMD, 0x06, 0x06,\
-							TASK_OPT, 0x00, 0x02, 0x00, tasks_to_perform, 0x00])
+							SBW_LINE_OPT, 0x00, 0x02, 0x00, sbw_line, 0x00])
+           
+        elif cmd == 8:#'Reset Options':
+            reset = data
+            ret.bytes_ = bytearray([PROMPT, MAIN_CONFIG_CMD, 0x06, 0x06,\
+							RESET_OPT, 0x00, 0x02, 0x00, reset, 0x00])
+           
            
         elif cmd == 'Self Test':
             ret.bytes_ = bytearray([PROMPT, 0x35, 0x06, 0x06, 0x00, 0x00,\
@@ -332,9 +389,9 @@ class MspGang(object):
 
     def verify(self, channel=ALL_CHANNELS, task=(CONNECT | VERIFY)):
         """
-        Verifies all msps connected to the MSP Gang
+        Verifies all msps connected to the MSP Gang tasks, vcc_val, powerSource, interface, channles, vcc_en
 		""" 
-        frame_list = MspGangDataFrame.ProgMediator(IMAGE_1,channel, GANG_PWR, task)
+        frame_list = MspGangDataFrame.ProgMediator(IMAGE_1, task, 0x0C, GANG_PWR, JTAG_FAST, channel, VCC_ON)
         self.send_multi_frame(frame_list)
         self.send_single_frame(bytearray([STATUS]))
         return self._error_check()

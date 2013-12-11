@@ -21,7 +21,7 @@ if __name__ == '__main__':
 
 DATA_LENGTH = 128
 
-
+ERROR_LIST = ["CONNECTION ERROR", "ERASE ERROR", "BLANK CHECK ERROR", "PROGRAM ERROR", "VERIFY ERROR", "SECURE ERROR"]
 # MspGang Messages
 SYN = 0x0D # communcation SYNcronize
 ACK = 0x90 # communcation ACKknowledge
@@ -113,7 +113,7 @@ SBW_TDIO = 0x00
 SBW_RST = 0x01
 
 
-
+# Reset Option
 RELASE_RESET = 0x00
 RESET_TARGET = 0x01
 
@@ -138,13 +138,14 @@ class MspGangDataFrame(object):
         self.bytes_ = None #bytes
 
     @classmethod
-    def ProgMediator(cls, image, tasks, vcc_val, powerSource, interface, channles, vcc_en):
+    def ProgMediator(cls, gang, channels, tasks):
         """
 		Sets options for main proccess.
 		@returns a list of frames ready to send to the Msp Gang
 		"""
         frames = []
-        data = [image, tasks, vcc_val, powerSource, interface, channles, vcc_en]
+        data = [gang.image, tasks, gang.vcc_val, gang.powerSource, gang.interface,\
+						channels, gang.vcc_en, gang.sbw_line, gang.reset]
         for i in range(len(data)):
             frames.append(MspGangDataFrame.FrameFactory(i,data[i]))
             frames[i].finalize()
@@ -317,6 +318,16 @@ class MspGang(object):
         self.image_transferred = False
         self.closed = True
         self._last_status_result = None
+
+        self.image = IMAGE_1
+        self.vcc_val = 0x0D
+        self.powerSource = GANG_PWR
+        self.interface = JTAG_FAST
+        self.vcc_en = VCC_ON
+        self.sbw_line = SBW_TDIO
+        self.reset = RESET_TARGET
+
+        self._channel_results = ["No Results"] * 8
         logging.debug('init completed')
         #self.alcaStream = None
 
@@ -350,6 +361,7 @@ class MspGang(object):
     def autoopen(self):
         raise NotImplementedError("Auto Open not implemented.")
 
+
     def set_image(self, file_):
         """
         Sets selected file to Image 1
@@ -368,40 +380,46 @@ class MspGang(object):
         self.send_multi_frame(frame_list)
         self.image_transferred = True
 
-    def erase(self, channel=ALL_CHANNELS, ask=(CONNECT | ERASE)):
+
+    def erase(self, channel=ALL_CHANNELS, task=(CONNECT | ERASE)):
         """
         Erases all msps connected to the MSP Gang
 		"""
-        frame_list = MspGangDataFrame.ProgMediator(IMAGE_1,channel, GANG_PWR, task)
+        frame_list = MspGangDataFrame.ProgMediator(self, channel, task)
         self.send_multi_frame(frame_list)
         self.send_single_frame(bytearray([STATUS]))
         return self._error_check()
+
 
     def program(self, channel=ALL_CHANNELS,\
 					task=(CONNECT | ERASE | BLANK_CHECK | PROGRAM | VERIFY)):
         """
         Programs all msps connected to the MSP Gang.
 		"""		
-        frame_list = MspGangDataFrame.ProgMediator(IMAGE_1,channel, GANG_PWR, task)
+        frame_list = MspGangDataFrame.ProgMediator(self, channel, task)
         self.send_multi_frame(frame_list)
         self.send_single_frame(bytearray([STATUS]))
         return self._error_check()
 
+
     def verify(self, channel=ALL_CHANNELS, task=(CONNECT | VERIFY)):
         """
-        Verifies all msps connected to the MSP Gang tasks, vcc_val, powerSource, interface, channles, vcc_en
+        Verifies all msps connected to the MSP Gang 
 		""" 
-        frame_list = MspGangDataFrame.ProgMediator(IMAGE_1, task, 0x0C, GANG_PWR, JTAG_FAST, channel, VCC_ON)
+        frame_list = MspGangDataFrame.ProgMediator(self, channel, task)
         self.send_multi_frame(frame_list)
         self.send_single_frame(bytearray([STATUS]))
         return self._error_check()
+
 
     def _error_check(self):
         """
         Checks last status for any errors.
 		@returns a negative 8 bit binary value of the failed channels.
         """
-        return self._last_status_result[10] - ALL_CHANNELS  
+        error = self._last_status_result[10] -  self._last_status_result[11] 
+        self._failed_channels(error)
+        return error
 
 
     def _failed_channels(self, error):
@@ -409,14 +427,30 @@ class MspGang(object):
 		Given the error number returns a list of failed channels 
         """
         fail_list = []
+        pass_list= []
         bin_val = 1
         if error < 0:
             error = error * -1
         for i in range(8):
             if error & bin_val == bin_val:
-                fail_list.append(i+1)
+                fail_list.append(i)
+            else:
+                pass_list.append(i)
             bin_val = bin_val * 2
-        return fail_list
+        for i in pass_list:
+            self._channel_results[i] =  "OK"
+        error_it = 0
+        while len(fail_list) != 0:
+            remove_list = []
+            for i in fail_list:
+                if 2**i & self._last_status_result[12+error_it] != 2**i:
+                    #import pdb; pdb.set_trace() 
+                    self._channel_results[i] = ERROR_LIST[error_it]
+                    remove_list.append(i)
+            for j in remove_list:
+                fail_list.remove(j)
+            error_it += 1
+
 
     @classmethod
     def doSyncronize(cls, serial_dev):
@@ -426,6 +460,7 @@ class MspGang(object):
         cls.write_stream([SYN,] , serial_dev)
         cls.wait_for_ack(serial_dev)
         logging.debug('ack done')
+
 
     @classmethod
     def write_stream(cls, data, stream):
@@ -477,7 +512,8 @@ class MspGang(object):
             logging.debug("received 0x%x (after escaping)" % in_byte)
 
         return in_byte
-    
+
+
     @classmethod    
     def wait_for_ack(cls, stream):
         '''

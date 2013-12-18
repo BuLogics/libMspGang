@@ -13,7 +13,7 @@ import MspGang
 
 
 g = MspGang.MspGang()
-g.open('/dev/ttyACM0') 
+g.autoopen() 
 
 
 
@@ -21,5 +21,5 @@ g.open('/dev/ttyACM0')
 g.set_image("Foo.mspgangbin")
 #print g.image_transferred
 
-g.verify()
+g.program()
 print g._channel_results

@@ -20,8 +20,8 @@ if __name__ == '__main__':
     print('Not usable as a program. Please use as a module') 
 
 DATA_LENGTH = 128
-
 ERROR_LIST = ["CONNECTION ERROR", "ERASE ERROR", "BLANK CHECK ERROR", "PROGRAM ERROR", "VERIFY ERROR", "SECURE ERROR"]
+
 # MspGang Messages
 SYN = 0x0D # communcation SYNcronize
 ACK = 0x90 # communcation ACKknowledge
@@ -29,6 +29,7 @@ NACK = 0xA0 # Negavive ACKnowledge
 IN_PROG = 0xB0 # Command in Progress
 PROMPT = 0x3E # Command Prompt
 STATUS = 0xA5 # Status Report
+
 
 
 # MspGang commands
@@ -48,6 +49,7 @@ CHANNEL_EN_OPT = 0x0C
 VCC_EN_OPT = 0x0E
 SBW_LINE_OPT = 0x14
 RESET_OPT = 0x18
+
 
 
 # Image select
@@ -359,7 +361,40 @@ class MspGang(object):
         return serial_dev
   
     def autoopen(self):
-        raise NotImplementedError("Auto Open not implemented.")
+        """ function to autodetect a Msp430 by VID/PID and response to a
+        ping command. On success sets self._serial_device to an open
+        serial connection to the proper device.
+        @return True on success, throws error otherwise
+        @throws SerialException indicating no match was found
+        """
+        vid, pid = 0x2047, 0x0002
+        try:
+            import serial.tools.list_ports as lp
+        except ImportError as e:
+            raise ImportError("makerbot based pyserial required for autoopen")
+        serial_devs = lp.list_ports_by_vid_pid(vid, pid)
+        # flatten to a list to avoid GeneratorExit errors
+        devices = [d for d in serial_devs]
+        for dev in devices:
+            ser = self.open(dev['port'])
+            if ser is None:
+                continue
+            ser.baudrate = 9600
+            ser.baudrate = 115200
+            ser.timeout = 0
+            while len(ser.read()) > 0:
+                logger.debug("Flushed byte from input")
+            try:
+                self.doSyncronize(ser)
+                self._serial_dev = ser
+                return ser
+            except MspGangError as e:
+                self._serial_dev = None
+                #import pdb; pdb.set_trace() 
+                # todo: Close serial device
+                logging.warning(e)
+                ser.close() 
+        raise serial.SerialException("No match on VID/PID %04x:%04x" % (vid, pid))
 
 
     def set_image(self, file_):

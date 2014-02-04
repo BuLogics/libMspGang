@@ -1,0 +1,10 @@
+ctypesgen==0.r125
+-e git+https://github.com/BuLogics/pyserial.git#egg=pyserial
+Flask==0.9
+gevent==0.13.8
+greenlet==0.4.0
+intelhex==1.4
+Jinja2==2.6
+PyYAML==3.10
+Werkzeug==0.8.3
+wsgiref==0.1.2

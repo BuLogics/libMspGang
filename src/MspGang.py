@@ -231,9 +231,9 @@ class MspGangDataFrame(object):
 							TASK_OPT, 0x00, 0x02, 0x00, tasks_to_perform, 0x00])
 
         elif cmd == 2:#'VCC Value':
-            vcc_val = data 
+            vcc_msb, vcc_lsb = data 
             ret.bytes_ = bytearray([PROMPT, MAIN_CONFIG_CMD, 0x06, 0x06,\
-							VCC_VALUE_OPT, 0x00, 0x02, 0x00, 0x00, vcc_val])
+							VCC_VALUE_OPT, 0x00, 0x02, 0x00, vcc_lsb, vcc_msb])
  
         elif cmd == 3:#'Power Source':
             power_source = data 
@@ -315,23 +315,39 @@ class MspGang(object):
     tool.
 	"""
  
-    def __init__(self):
+    def __init__(self, image=IMAGE_1, vcc_val=(0x0C,0xE4), powerSource=TARGET_PWR,\
+					interface=JTAG_FAST, vcc_en=VCC_OFF, sbw_line=SBW_TDIO, reset=RESET_TARGET):
         self._serial_dev = None
         self.image_transferred = False
-        self.closed = True
         self._last_status_result = None
 
-        self.image = IMAGE_1
-        self.vcc_val = 0x0D
-        self.powerSource = GANG_PWR
-        self.interface = JTAG_FAST
-        self.vcc_en = VCC_ON
-        self.sbw_line = SBW_TDIO
-        self.reset = RESET_TARGET
 
-        self._channel_results = ["No Results"] * 8
+        # The image to write to and program.
+        self.image = image
+
+        # Duple that stores two hex values that combine to one hex val that represents the vcc 
+		# in mV. i.e. (0x0C, 0xE4) = 0x0CE4 = 3300 mV.
+        self.vcc_val = vcc_val
+        
+		# Where the target is getting power from.
+        self.powerSource = powerSource
+        
+		# The interface that the msp is being programmed by (JTAG or SBW) and the speed.
+        self.interface = interface
+        
+		# Immediately turn VCC target on of off.
+        self.vcc_en = vcc_en
+        
+		# Set interface configuration.
+        self.sbw_line = sbw_line
+
+        # Immediately reset target device.
+        self.reset = reset
+
+
+
+        self.channel_results = ["No Results"] * 8
         logging.debug('init completed')
-        #self.alcaStream = None
 
     def open(self, dev_name):
         '''
@@ -396,12 +412,16 @@ class MspGang(object):
                 ser.close() 
         raise serial.SerialException("No match on VID/PID %04x:%04x" % (vid, pid))
 
+    def close(self):
+        if self._serial_dev is not None:
+            self._serial_dev.close()
+
 
     def set_image(self, file_):
         """
-        Sets selected file to Image 1
+        Sets selected file to self.
 		"""
-        frame = MspGangDataFrame.FrameFactory(0,IMAGE_1)
+        frame = MspGangDataFrame.FrameFactory(0,self.image)
         frame.finalize()
         self.send_single_frame(frame.get_stream())
 
@@ -409,8 +429,6 @@ class MspGang(object):
         frame.finalize()
         self.send_single_frame(frame.get_stream())        
     
-        #prog_check = raw_input('--> ')
-
         frame_list =  MspGangDataFrame.FileParser(file_)
         self.send_multi_frame(frame_list)
         self.image_transferred = True
@@ -439,7 +457,7 @@ class MspGang(object):
 
     def verify(self, channel=ALL_CHANNELS, task=(CONNECT | VERIFY)):
         """
-        Verifies all msps connected to the MSP Gang 
+        Verifies all msps connected to the MSP Gang. 
 		""" 
         frame_list = MspGangDataFrame.ProgMediator(self, channel, task)
         self.send_multi_frame(frame_list)
@@ -473,14 +491,14 @@ class MspGang(object):
                 pass_list.append(i)
             bin_val = bin_val * 2
         for i in pass_list:
-            self._channel_results[i] =  "OK"
+            self.channel_results[i] =  "OK"
         error_it = 0
         while len(fail_list) != 0:
             remove_list = []
             for i in fail_list:
                 if 2**i & self._last_status_result[12+error_it] != 2**i:
                     #import pdb; pdb.set_trace() 
-                    self._channel_results[i] = ERROR_LIST[error_it]
+                    self.channel_results[i] = ERROR_LIST[error_it]
                     remove_list.append(i)
             for j in remove_list:
                 fail_list.remove(j)
@@ -573,8 +591,6 @@ class MspGang(object):
                 return True
             elif ack_byte == NACK:
                 raise MspGangError("Nacked!")
-                #elif ack_byte == IN_PROG:
-                #cls.send(cls._serial_dev,bytearray([0xA5]))
             bytes_received += 1
             if ack_byte == IN_PROG:
                 prog_byte = True
